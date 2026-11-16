@@ -1,0 +1,16 @@
+# Godot generated files and build outputs
+.godot/
+.import/
+build/
+export.cfg
+export_credentials.cfg
+
+# Local Android signing material
+*.keystore
+*.jks
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
