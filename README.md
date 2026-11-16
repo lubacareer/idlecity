@@ -26,14 +26,31 @@ uses the GL Compatibility renderer and is designed for landscape Android; a
 mouse works for desktop development. Generated original illustrations live
 under `assets/`.
 
-Run the economy and save tests from the repository root:
+Run the game and debug-signing tests from the repository root:
 
 ```sh
 godot --headless --path . --script tests/test_economy.gd
 godot --headless --path . --script tests/test_ui.gd
+godot --headless --path . --script tests/test_clock_economy.gd
+godot --headless --path . --script tests/test_save_recovery.gd
+godot --headless --path . --script tests/test_save_retry.gd
+bash tests/test_debug_signing.sh
 ```
 
 The Android export preset builds a debug APK at `build/idle-city-debug.apk`.
 Install the matching Godot export templates and configure the Android SDK and
 JDK in Godot's editor settings before exporting. Release signing and Play Store
 publishing are outside this prototype.
+
+CI signs trusted builds with a persistent, debug-only keystore stored in the
+`IDLECITY_DEBUG_KEYSTORE_BASE64` repository Actions secret. Keep a protected
+backup of that key; changing it means Android cannot install the new APK over
+an APK signed with the old key. Local debug exports use the developer's own
+configured key and may not be update-compatible with CI artifacts. Builds
+from fork pull requests never receive the persistent key: they use an
+ephemeral key and publish a separately named `idle-city-untrusted-debug-apk`
+artifact. Such artifacts are not update-compatible with trusted builds or
+other fork runs. Previously issued APKs used per-run keys and likewise cannot
+be upgraded to the new trusted APK without an uninstall and loss of local data.
+
+The APK includes 32-bit ARM, 64-bit ARM, and 64-bit x86 native libraries.

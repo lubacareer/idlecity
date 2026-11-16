@@ -5,6 +5,7 @@ const SAVE_VERSION := 1
 const GRID_SIZE := 8
 const LEVEL_TWO_XP := 3
 const LEVEL_THREE_XP := 10
+const MAX_OFFLINE_SECONDS := 120
 const CATALOG := {
 	"house": {"name": "House", "cost": 40, "required_level": 1, "income": 10, "xp": 1, "seconds": 30},
 	"cafe": {"name": "Café", "cost": 50, "required_level": 2, "income": 25, "xp": 2, "seconds": 60},
@@ -16,10 +17,15 @@ var xp: int = 0
 var buildings: Array = []
 var last_observed_at: int = 0
 var next_id: int = 2
+var wall_checkpoint_at: int = 0
+var _clock_started := false
+var _clock_paused := false
+var _last_monotonic_ms: int = 0
 
 
 func _init(now: int = 0) -> void:
 	last_observed_at = maxi(0, now)
+	wall_checkpoint_at = last_observed_at
 	buildings = [{"id": 1, "type": "house", "x": 3, "y": 3, "cycle_started_at": last_observed_at}]
 
 
@@ -36,9 +42,44 @@ func level() -> int:
 
 
 func observe_time(now: int) -> int:
-	# Freeze game time during clock rollback, including after a saved restart.
+	# Callers using the original API supply a wall-clock-like timeline. Active
+	# sessions instead pass the monotonic logical time from advance_time().
 	last_observed_at = maxi(last_observed_at, now)
+	if not _clock_started:
+		wall_checkpoint_at = maxi(wall_checkpoint_at, now)
 	return last_observed_at
+
+
+func start_clock(wall_now: int, monotonic_ms: int) -> void:
+	_clock_started = true
+	_clock_paused = false
+	wall_checkpoint_at = maxi(0, wall_now)
+	_last_monotonic_ms = monotonic_ms
+
+
+func advance_time(wall_now: int, monotonic_ms: int) -> int:
+	if not _clock_started:
+		start_clock(wall_now, monotonic_ms)
+	if _clock_paused:
+		return last_observed_at
+	var elapsed_ms := maxi(0, monotonic_ms - _last_monotonic_ms)
+	var elapsed_seconds := int(elapsed_ms / 1000)
+	last_observed_at += elapsed_seconds
+	_last_monotonic_ms += elapsed_seconds * 1000
+	wall_checkpoint_at = maxi(0, wall_now)
+	return last_observed_at
+
+
+func pause_clock(wall_now: int) -> void:
+	if not _clock_paused:
+		wall_checkpoint_at = maxi(0, wall_now)
+		_clock_paused = true
+
+
+func resume_clock(wall_now: int, monotonic_ms: int) -> void:
+	if _clock_paused:
+		last_observed_at += clampi(wall_now - wall_checkpoint_at, 0, MAX_OFFLINE_SECONDS)
+	start_clock(wall_now, monotonic_ms)
 
 
 func is_ready(id: int, now: int) -> bool:
@@ -87,6 +128,7 @@ func serialize() -> Dictionary:
 		"xp": xp,
 		"buildings": buildings.duplicate(true),
 		"last_observed_at": last_observed_at,
+		"wall_checkpoint_at": wall_checkpoint_at,
 		"next_id": next_id,
 	}
 
@@ -107,6 +149,8 @@ static func from_data(data: Variant, now: int):
 			return null
 	if int(data["version"]) != SAVE_VERSION or int(data["next_id"]) < 2:
 		return null
+	if data.has("wall_checkpoint_at") and not _is_nonnegative_integer(data["wall_checkpoint_at"]):
+		return null
 	if not data.has("buildings") or not data["buildings"] is Array:
 		return null
 	var saved_buildings: Array = data["buildings"]
@@ -119,6 +163,11 @@ static func from_data(data: Variant, now: int):
 		if not item is Dictionary or not item.has("type") or not item["type"] is String:
 			return null
 		if not CATALOG.has(item["type"]):
+			return null
+		var required_level: int = CATALOG[item["type"]]["required_level"]
+		var saved_xp: int = int(data["xp"])
+		var saved_level := 3 if saved_xp >= LEVEL_THREE_XP else (2 if saved_xp >= LEVEL_TWO_XP else 1)
+		if required_level > saved_level:
 			return null
 		for field in ["id", "x", "y", "cycle_started_at"]:
 			if not item.has(field) or not _is_nonnegative_integer(item[field]):
@@ -140,5 +189,7 @@ static func from_data(data: Variant, now: int):
 	result.xp = int(data["xp"])
 	result.next_id = int(data["next_id"])
 	result.buildings = checked_buildings
-	result.observe_time(now)
+	var checkpoint := int(data.get("wall_checkpoint_at", data["last_observed_at"]))
+	result.last_observed_at += clampi(now - checkpoint, 0, MAX_OFFLINE_SECONDS)
+	result.wall_checkpoint_at = maxi(0, now)
 	return result

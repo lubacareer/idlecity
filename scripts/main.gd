@@ -32,6 +32,10 @@ var status_until := 0.0
 var elapsed := 0.0
 var refresh_elapsed := 0.0
 var last_level := 1
+const SAVE_RETRY_INITIAL_SECONDS := 5.0
+const SAVE_RETRY_MAX_SECONDS := 60.0
+var save_retry_delay := SAVE_RETRY_INITIAL_SECONDS
+var save_retry_remaining := -1.0
 
 var canvas: Control
 var coin_label: Label
@@ -58,15 +62,19 @@ func _ready() -> void:
 	var now := _now()
 	economy = saver.load_game(now)
 	_build_ui()
+	var new_city := false
 	if economy == null:
 		if saver.last_error.is_empty():
 			economy = Economy.new(now)
-			_save()
+			new_city = true
 		else:
 			buildings_tab.disabled = true
 			residents_tab.disabled = true
 			_show_error("Your city could not be loaded. Your save files were kept intact. " + saver.last_error)
 	if economy:
+		economy.start_clock(now, Time.get_ticks_msec())
+		if new_city:
+			_save()
 		last_level = economy.level()
 		if saver.recovered_from_backup or saver.recovered_from_temporary:
 			_toast("Your city was restored from a recovery copy.", 7.0)
@@ -76,9 +84,18 @@ func _ready() -> void:
 func _now() -> int:
 	return int(Time.get_unix_time_from_system())
 
+func _game_now() -> int:
+	return economy.advance_time(_now(), Time.get_ticks_msec())
+
 func _process(delta: float) -> void:
 	elapsed += delta
 	refresh_elapsed += delta
+	if save_retry_remaining >= 0.0 and economy:
+		save_retry_remaining -= delta
+		if save_retry_remaining <= 0.0:
+			save_retry_remaining = -1.0
+			save_retry_delay = minf(save_retry_delay * 2.0, SAVE_RETRY_MAX_SECONDS)
+			_save()
 	if refresh_elapsed >= 0.25:
 		refresh_elapsed = 0.0
 		if economy:
@@ -91,13 +108,22 @@ func _process(delta: float) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
 		if economy:
+			_game_now()
+			economy.pause_clock(_now())
 			_save()
+	elif what == NOTIFICATION_APPLICATION_RESUMED and economy:
+		economy.resume_clock(_now(), Time.get_ticks_msec())
 
 func _save() -> bool:
 	if not economy:
 		return false
-	economy.observe_time(_now())
+	_game_now()
 	var saved := saver.save_game(economy)
+	if saved:
+		save_retry_remaining = -1.0
+		save_retry_delay = SAVE_RETRY_INITIAL_SECONDS
+	elif save_retry_remaining < 0.0:
+		save_retry_remaining = save_retry_delay
 	if save_warning:
 		save_warning.visible = not saved
 		if not saved:
@@ -386,7 +412,7 @@ func _end_pointer(pos: Vector2) -> void:
 			_toast("Tap the highlighted spot again to build.")
 			queue_redraw()
 			return
-		if economy.purchase(active_type, cell.x, cell.y, _now()):
+		if economy.purchase(active_type, cell.x, cell.y, _game_now()):
 			if _save():
 				_toast("Your %s is open for business. Tax not included." % active_type)
 			_cancel_placement()
@@ -395,11 +421,11 @@ func _end_pointer(pos: Vector2) -> void:
 			_toast("That spot is occupied or you need more coins.")
 		return
 	for building in economy.buildings:
-		if economy.is_ready(building.id, _now()):
+		if economy.is_ready(building.id, _game_now()):
 			var coin_pos := _coin_position(building)
 			if pos.distance_to(coin_pos) <= 38.0:
 				var old_level := economy.level()
-				if economy.collect(building.id, _now()):
+				if economy.collect(building.id, _game_now()):
 					var saved := _save()
 					if economy.level() > old_level and saved:
 						var resident: Dictionary = RESIDENTS[economy.level() - 1]
@@ -449,7 +475,7 @@ func _draw() -> void:
 		else:
 			_draw_resident(entity.index)
 	for building in economy.buildings:
-		if economy.is_ready(building.id, _now()):
+		if economy.is_ready(building.id, _game_now()):
 			_draw_coin(_coin_position(building))
 
 func _draw_background() -> void:

@@ -30,6 +30,13 @@ jobs:
         run: Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_economy.gd
       - name: Run scene interaction tests
         run: Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_ui.gd
+      - name: Run clock and recovery tests
+        run: |
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_clock_economy.gd
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_save_recovery.gd
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_save_retry.gd
+      - name: Test debug signing behavior
+        run: bash tests/test_debug_signing.sh
       - name: Verify Android SDK tools
         shell: bash
         run: |
@@ -46,26 +53,31 @@ jobs:
           echo "f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  $RUNNER_TEMP/$archive" | sha256sum --check
           mkdir -p "$HOME/.local/share/godot/export_templates/4.7.2.stable"
           unzip -j -q "$RUNNER_TEMP/$archive" 'templates/android_debug.apk' 'templates/version.txt' -d "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+      - name: Prepare persistent debug signing key
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          IDLECITY_DEBUG_KEYSTORE_BASE64: ${{ secrets.IDLECITY_DEBUG_KEYSTORE_BASE64 }}
+        run: bash scripts/prepare_debug_keystore.sh trusted "$RUNNER_TEMP/idlecity-debug.keystore"
+      - name: Prepare isolated debug signing key for fork PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: bash scripts/prepare_debug_keystore.sh untrusted "$RUNNER_TEMP/idlecity-debug.keystore"
       - name: Configure Android export
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.config/godot" "$HOME/.android" build
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -dname 'CN=Android Debug,O=Android,C=US' -keyalg RSA -keysize 2048 -validity 10000
-          fi
+          mkdir -p "$HOME/.config/godot" build
           cat > "$HOME/.config/godot/editor_settings-4.7.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
           export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore = "$RUNNER_TEMP/idlecity-debug.keystore"
           EOF
       - name: Export debug APK
         run: Godot_v4.7.2-stable_linux.x86_64 --headless --path . --export-debug Android build/idle-city-debug.apk
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: idle-city-debug-apk
+          name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'idle-city-untrusted-debug-apk' || 'idle-city-debug-apk' }}
           path: build/idle-city-debug.apk
           if-no-files-found: error

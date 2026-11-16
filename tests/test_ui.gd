@@ -67,6 +67,9 @@ func test_touch_purchase() -> void:
 	check(city.hover_cell == Vector2i(2, 2), "first touch highlights chosen tile")
 	await tap(target)
 	check(city.economy.buildings.size() == 2 and city.economy.coins == 0, "second touch confirms purchase")
+	if city.economy.buildings.size() == 2:
+		var placed: Dictionary = city.economy.buildings[1]
+		check(placed.x == 2 and placed.y == 2, "confirmed building occupies selected tile")
 	city.queue_free()
 	await process_frame
 
